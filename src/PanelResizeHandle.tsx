@@ -2,6 +2,7 @@ import {
   useRef,
   type CSSProperties,
   type KeyboardEvent,
+  type MouseEvent,
   type PointerEvent,
   type ReactNode,
 } from "react";
@@ -16,6 +17,13 @@ export interface PanelResizeHandleProps {
   handleIndex: number;
   /** Percentage points moved per arrow-key press. Defaults to 5. */
   keyboardStep?: number;
+  /** Disable dragging and keyboard resizing for this handle. */
+  disabled?: boolean;
+  /**
+   * Double-clicking the handle resets its two adjacent panels to their default
+   * split. Set to `false` to opt out. Defaults to `true`.
+   */
+  resetOnDoubleClick?: boolean;
   className?: string;
   style?: CSSProperties;
   children?: ReactNode;
@@ -24,57 +32,51 @@ export interface PanelResizeHandleProps {
 
 /**
  * A draggable divider between two panels. Pointer drags resize the adjacent
- * panels; arrow keys nudge the layout for keyboard accessibility.
+ * panels; arrow keys nudge the layout for keyboard accessibility; Home/End jump
+ * the divider fully one way; double-click resets to the default split.
  */
 export function PanelResizeHandle({
   handleIndex,
   keyboardStep = 5,
+  disabled = false,
+  resetOnDoubleClick = true,
   className,
   style,
   children,
   "aria-label": ariaLabel,
 }: PanelResizeHandleProps) {
-  const { direction, startDrag, sizes } = usePanelGroup();
+  const { direction, startDrag, nudge, resetHandle, sizes } = usePanelGroup();
   const ref = useRef<HTMLDivElement>(null);
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (disabled) return;
     e.preventDefault();
     ref.current?.setPointerCapture?.(e.pointerId);
     const clientPos = direction === "horizontal" ? e.clientX : e.clientY;
     startDrag(handleIndex, clientPos);
   };
 
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    const horizontal = direction === "horizontal";
-    let delta = 0;
-    if ((horizontal && e.key === "ArrowLeft") || (!horizontal && e.key === "ArrowUp")) {
-      delta = -keyboardStep;
-    } else if (
-      (horizontal && e.key === "ArrowRight") ||
-      (!horizontal && e.key === "ArrowDown")
-    ) {
-      delta = keyboardStep;
-    }
-    if (delta === 0) return;
+  const onDoubleClick = (e: MouseEvent<HTMLDivElement>) => {
+    if (disabled || !resetOnDoubleClick) return;
     e.preventDefault();
-    // Simulate a drag of `delta` percent via the group's pointer pipeline by
-    // seeding a start drag at 0 then dispatching an equivalent move is complex;
-    // instead we resize directly through a synthetic single-step pointer model.
-    // Reuse the same code path: start a drag and apply one discrete delta.
-    startDrag(handleIndex, 0);
-    // Dispatch a synthetic pointer move so the group's listener applies it.
-    const groupEl = ref.current?.closest("[data-panel-group]") as HTMLElement | null;
-    if (!groupEl) return;
-    const rect = groupEl.getBoundingClientRect();
-    const groupPx = horizontal ? rect.width : rect.height;
-    const px = (delta / 100) * groupPx;
-    const evt = new PointerEvent("pointermove", {
-      clientX: horizontal ? px : 0,
-      clientY: horizontal ? 0 : px,
-      bubbles: true,
-    });
-    window.dispatchEvent(evt);
-    window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    resetHandle(handleIndex);
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
+    const horizontal = direction === "horizontal";
+    const decrease = horizontal ? "ArrowLeft" : "ArrowUp";
+    const increase = horizontal ? "ArrowRight" : "ArrowDown";
+
+    let delta = 0;
+    if (e.key === decrease) delta = -keyboardStep;
+    else if (e.key === increase) delta = keyboardStep;
+    else if (e.key === "Home") delta = -100;
+    else if (e.key === "End") delta = 100;
+    else return;
+
+    e.preventDefault();
+    nudge(handleIndex, delta);
   };
 
   const handleStyle: CSSProperties = {
@@ -82,10 +84,15 @@ export function PanelResizeHandle({
     flexShrink: 0,
     flexBasis: direction === "horizontal" ? "6px" : "auto",
     alignSelf: "stretch",
-    cursor: direction === "horizontal" ? "col-resize" : "row-resize",
+    cursor: disabled
+      ? "default"
+      : direction === "horizontal"
+        ? "col-resize"
+        : "row-resize",
     touchAction: "none",
     userSelect: "none",
     background: "#d0d0d0",
+    opacity: disabled ? 0.5 : 1,
     ...(direction === "vertical" ? { height: "6px", width: "100%" } : {}),
     ...style,
   };
@@ -96,17 +103,20 @@ export function PanelResizeHandle({
     <div
       ref={ref}
       role="separator"
-      tabIndex={0}
+      tabIndex={disabled ? -1 : 0}
       aria-label={ariaLabel ?? "Resize panels"}
       aria-orientation={direction === "horizontal" ? "vertical" : "horizontal"}
       aria-valuenow={valueNow === undefined ? undefined : Math.round(valueNow)}
       aria-valuemin={0}
       aria-valuemax={100}
+      aria-disabled={disabled || undefined}
       className={className}
       style={handleStyle}
       data-panel-resize-handle=""
       data-handle-index={handleIndex}
+      data-disabled={disabled ? "" : undefined}
       onPointerDown={onPointerDown}
+      onDoubleClick={onDoubleClick}
       onKeyDown={onKeyDown}
     >
       {children}

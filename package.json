@@ -1,6 +1,6 @@
 {
   "name": "react-resizable-panels",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Resizable split panels for React with drag handles and persisted sizes.",
   "type": "module",
   "license": "MIT",
@@ -17,10 +17,14 @@
     "react",
     "resizable-panels",
     "split-pane",
+    "split-view",
+    "collapsible",
+    "drag-resize",
     "typescript",
     "ui-components",
     "layout",
-    "react-component"
+    "react-component",
+    "accessibility"
   ],
   "main": "dist/index.js",
   "module": "dist/index.js",

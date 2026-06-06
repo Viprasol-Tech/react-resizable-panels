@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyCollapseSnap,
+  collapsePanel,
+  collapsedSizeOf,
   distributeEvenly,
+  expandPanel,
+  isCollapsed,
   normalize,
   pxDeltaToPct,
+  resetToDefaults,
   resizePanels,
 } from "../resize";
 
@@ -107,5 +113,155 @@ describe("pxDeltaToPct", () => {
 
   it("returns 0 for a zero-sized group", () => {
     expect(pxDeltaToPct(50, 0)).toBe(0);
+  });
+});
+
+describe("collapsedSizeOf", () => {
+  it("defaults to 0 and never goes negative", () => {
+    expect(collapsedSizeOf(undefined)).toBe(0);
+    expect(collapsedSizeOf({})).toBe(0);
+    expect(collapsedSizeOf({ collapsedSize: 8 })).toBe(8);
+    expect(collapsedSizeOf({ collapsedSize: -5 })).toBe(0);
+  });
+});
+
+describe("isCollapsed", () => {
+  it("reports collapsed when size is at the collapsed size below min", () => {
+    expect(isCollapsed(0, { min: 10, collapsible: true })).toBe(true);
+    expect(isCollapsed(4, { min: 10, collapsedSize: 4 })).toBe(true);
+  });
+
+  it("is not collapsed when at or above min", () => {
+    expect(isCollapsed(10, { min: 10 })).toBe(false);
+    expect(isCollapsed(20, { min: 10 })).toBe(false);
+  });
+
+  it("is never collapsed when there is no real min above the collapsed size", () => {
+    expect(isCollapsed(0, {})).toBe(false);
+    expect(isCollapsed(0, { min: 0 })).toBe(false);
+  });
+});
+
+describe("collapsePanel", () => {
+  it("collapses a panel to 0 and gives space to its right neighbor", () => {
+    const result = collapsePanel([30, 40, 30], 0, [
+      { collapsible: true },
+      {},
+      {},
+    ]);
+    expect(result[0]).toBeCloseTo(0, 5);
+    expect(result[1]).toBeCloseTo(70, 5);
+    expect(result[2]).toBeCloseTo(30, 5);
+    expect(sum(result)).toBeCloseTo(100, 5);
+  });
+
+  it("collapses to a non-zero collapsedSize", () => {
+    const result = collapsePanel([40, 60], 0, [{ collapsedSize: 5 }, {}]);
+    expect(result[0]).toBeCloseTo(5, 5);
+    expect(result[1]).toBeCloseTo(95, 5);
+  });
+
+  it("hands freed space to the left neighbor for the last panel", () => {
+    const result = collapsePanel([30, 30, 40], 2, [{}, {}, {}]);
+    expect(result[2]).toBeCloseTo(0, 5);
+    expect(result[1]).toBeCloseTo(70, 5);
+  });
+
+  it("is a no-op for an out-of-range index", () => {
+    expect(collapsePanel([50, 50], 9)).toEqual([50, 50]);
+  });
+
+  it("does not mutate its input", () => {
+    const input = [50, 50];
+    collapsePanel(input, 0, [{ collapsible: true }, {}]);
+    expect(input).toEqual([50, 50]);
+  });
+});
+
+describe("expandPanel", () => {
+  it("expands a collapsed panel back to its min, pulling from a neighbor", () => {
+    const result = expandPanel([0, 100], 0, [{ min: 20 }, {}], undefined);
+    expect(result[0]).toBeCloseTo(20, 5);
+    expect(result[1]).toBeCloseTo(80, 5);
+  });
+
+  it("expands to an explicit target size", () => {
+    const result = expandPanel([0, 100], 0, [{ min: 10, max: 60 }, {}], 40);
+    expect(result[0]).toBeCloseTo(40, 5);
+    expect(result[1]).toBeCloseTo(60, 5);
+  });
+
+  it("clamps the target to the panel max", () => {
+    const result = expandPanel([0, 100], 0, [{ max: 30 }, {}], 90);
+    expect(result[0]).toBeCloseTo(30, 5);
+  });
+
+  it("respects neighbor mins when pulling space", () => {
+    const result = expandPanel([0, 50, 50], 0, [
+      { min: 80 },
+      { min: 30 },
+      { min: 30 },
+    ]);
+    // Neighbors can only give up 20 each (50 - 30), so panel 0 reaches 40.
+    expect(result[0]).toBeCloseTo(40, 5);
+    expect(sum(result)).toBeCloseTo(100, 5);
+  });
+
+  it("is a no-op when already at or above the target", () => {
+    expect(expandPanel([60, 40], 0, [{ min: 20 }, {}], 50)).toEqual([60, 40]);
+  });
+});
+
+describe("resetToDefaults", () => {
+  it("honors explicit defaults that already sum to 100", () => {
+    const result = resetToDefaults([20, 30, 50], []);
+    expect(result).toEqual([20, 30, 50]);
+    expect(sum(result)).toBeCloseTo(100, 5);
+  });
+
+  it("fills gaps with an even share, then normalizes to 100", () => {
+    const result = resetToDefaults([20, undefined, undefined], []);
+    // 20 + 33.33 + 33.33 = 86.67, rescaled to 100 keeps proportions.
+    expect(result[1]).toBeCloseTo(result[2], 5);
+    expect(sum(result)).toBeCloseTo(100, 5);
+  });
+
+  it("falls back to an even split when no defaults are given", () => {
+    expect(resetToDefaults([undefined, undefined])).toEqual([50, 50]);
+  });
+
+  it("returns an empty array for no panels", () => {
+    expect(resetToDefaults([])).toEqual([]);
+  });
+
+  it("clamps each default into its constraint range before normalizing", () => {
+    // 90 is clamped to its max of 60 first; then [60,10] normalizes to ~[85.7,14.3].
+    const result = resetToDefaults([90, 10], [{ max: 60 }, {}]);
+    expect(result[0]).toBeCloseTo(60 / 70 * 100, 5);
+    expect(sum(result)).toBeCloseTo(100, 5);
+  });
+});
+
+describe("applyCollapseSnap", () => {
+  it("snaps a collapsible panel shut when dragged well below min", () => {
+    const result = applyCollapseSnap(
+      [2, 98],
+      [{ min: 20, collapsible: true }, {}],
+      5,
+    );
+    expect(result[0]).toBeCloseTo(0, 5);
+    expect(result[1]).toBeCloseTo(100, 5);
+  });
+
+  it("pushes a non-collapsible panel back up to its min", () => {
+    const result = applyCollapseSnap([5, 95], [{ min: 20 }, {}], 5);
+    expect(result[0]).toBeCloseTo(20, 5);
+    expect(result[1]).toBeCloseTo(80, 5);
+  });
+
+  it("leaves a panel within bounds untouched", () => {
+    const result = applyCollapseSnap([30, 70], [{ min: 20 }, {}], 5);
+    expect(result[0]).toBeCloseTo(30, 5);
+    expect(result[1]).toBeCloseTo(70, 5);
   });
 });
